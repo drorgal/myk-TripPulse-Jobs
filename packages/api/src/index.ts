@@ -1,14 +1,11 @@
-import express from 'express';
+import { createLogger } from '@trippulse/shared';
+import { createApp } from './app';
 
-const app = express();
-const PORT = process.env['API_PORT'] ?? 3000;
+const logger = createLogger('api');
+const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 
-app.use(express.json());
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'trippulse-api' });
-});
+const app = createApp();
 
 app.listen(PORT, () => {
-  console.log(`[api] Listening on port ${PORT}`);
+  logger.info({ port: PORT }, 'TripPulse API listening');
 });
