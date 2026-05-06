@@ -1,11 +1,21 @@
 import type { Request, Response, NextFunction } from 'express';
+import { createLogger } from '@trippulse/shared';
 import type { CarSearchParams } from '@trippulse/shared';
 import { createCarSearchJob, getJobById } from '../services/job.service';
+import { jobsCreatedTotal } from '../metrics';
+
+const logger = createLogger('jobs-controller');
 
 export async function createCarSearch(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const params = req.body as CarSearchParams;
     const job = await createCarSearchJob(params);
+
+    // Correlation bridge: links pino-http's reqId (API layer) to searchJobId (worker layer).
+    // Search logs by reqId to find this line, then by searchJobId to trace the worker.
+    logger.info({ reqId: (req as Request & { id?: string }).id, searchJobId: job.id }, 'Car search job enqueued');
+    jobsCreatedTotal.inc({ status: 'success' });
+
     res.status(202).json({
       jobId: job.id,
       status: job.status,
@@ -14,6 +24,7 @@ export async function createCarSearch(req: Request, res: Response, next: NextFun
       estimatedWaitMs: 5000,
     });
   } catch (err) {
+    jobsCreatedTotal.inc({ status: 'error' });
     next(err);
   }
 }
