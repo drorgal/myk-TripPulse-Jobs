@@ -5,19 +5,30 @@ import type { ProviderResult } from '../shared/provider.interface';
 interface MockProviderOptions {
   // Simulated network delay in ms. Pass 0 in tests for instant results.
   delayMs?: number;
+  // Override the provider name (useful when creating multiple instances in tests).
+  name?: string;
+  // Force search() to throw — simulates a provider outage.
+  shouldFail?: boolean;
+  // Custom error message when shouldFail is true.
+  failureReason?: string;
 }
 
 export class MockCarRentalProvider implements CarRentalProvider {
-  readonly name = 'mock';
+  readonly name: string;
   readonly version = '1.0';
 
   private readonly delayMs: number;
+  private readonly shouldFail: boolean;
+  private readonly failureReason: string | undefined;
   // Static counter makes providerOfferId deterministic across calls —
   // easier to assert in tests than random IDs.
   private static callCount = 0;
 
   constructor(options: MockProviderOptions = {}) {
+    this.name = options.name ?? 'mock';
     this.delayMs = options.delayMs ?? 300;
+    this.shouldFail = options.shouldFail ?? false;
+    this.failureReason = options.failureReason;
   }
 
   async ping(): Promise<boolean> {
@@ -25,6 +36,10 @@ export class MockCarRentalProvider implements CarRentalProvider {
   }
 
   async search(params: CarSearchParams): Promise<ProviderResult<CarOffer>> {
+    if (this.shouldFail) {
+      throw new Error(this.failureReason ?? 'Mock provider intentional failure');
+    }
+
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }

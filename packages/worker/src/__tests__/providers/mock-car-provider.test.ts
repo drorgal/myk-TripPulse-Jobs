@@ -107,6 +107,33 @@ describe('MockCarRentalProvider', () => {
   });
 });
 
+describe('MockCarRentalProvider failure modes', () => {
+  it('throws when shouldFail is true', async () => {
+    const failing = new MockCarRentalProvider({ delayMs: 0, shouldFail: true });
+    await expect(failing.search(BASE_PARAMS)).rejects.toThrow('Mock provider intentional failure');
+  });
+
+  it('uses failureReason as the error message', async () => {
+    const failing = new MockCarRentalProvider({
+      delayMs: 0,
+      shouldFail: true,
+      failureReason: 'Service unavailable',
+    });
+    await expect(failing.search(BASE_PARAMS)).rejects.toThrow('Service unavailable');
+  });
+
+  it('succeeds normally when shouldFail is false', async () => {
+    const ok = new MockCarRentalProvider({ delayMs: 0, shouldFail: false });
+    const result = await ok.search(BASE_PARAMS);
+    expect(result.offers).toHaveLength(3);
+  });
+
+  it('uses custom name when provided', () => {
+    const named = new MockCarRentalProvider({ name: 'mock-b' });
+    expect(named.name).toBe('mock-b');
+  });
+});
+
 describe('getCarRentalProviders (registry)', () => {
   it('returns all registered providers when called with no arguments', () => {
     const all = getCarRentalProviders();
