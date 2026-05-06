@@ -1,0 +1,24 @@
+{
+  "name": "@trippulse/worker",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@trippulse/db": "workspace:*",
+    "@trippulse/shared": "workspace:*",
+    "bullmq": "^5.12.5"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.3",
+    "tsx": "^4.16.2"
+  }
+}

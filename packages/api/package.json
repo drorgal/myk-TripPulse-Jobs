@@ -1,0 +1,29 @@
+{
+  "name": "@trippulse/api",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@trippulse/db": "workspace:*",
+    "@trippulse/shared": "workspace:*",
+    "bullmq": "^5.12.5",
+    "express": "^4.21.0",
+    "pino-http": "^10.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.10",
+    "@types/supertest": "^6.0.2",
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.3",
+    "tsx": "^4.16.2"
+  }
+}

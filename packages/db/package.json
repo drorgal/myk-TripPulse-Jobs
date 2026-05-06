@@ -1,0 +1,24 @@
+{
+  "name": "@trippulse/db",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "migrate": "prisma migrate dev",
+    "studio": "prisma studio",
+    "seed": "tsx prisma/seed.ts",
+    "generate": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.2",
+    "@trippulse/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "prisma": "^5.16.2",
+    "tsx": "^4.16.2"
+  }
+}

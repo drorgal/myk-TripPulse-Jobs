@@ -1,0 +1,33 @@
+{
+  "name": "myk-trippulse-jobs",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm dev:api\" \"pnpm dev:worker\"",
+    "dev:api": "pnpm --filter @trippulse/api dev",
+    "dev:worker": "pnpm --filter @trippulse/worker dev",
+    "build": "pnpm --filter @trippulse/shared build && pnpm --filter @trippulse/db build && pnpm --filter @trippulse/api build && pnpm --filter @trippulse/worker build",
+    "test": "pnpm -r test",
+    "db:migrate": "pnpm --filter @trippulse/db migrate",
+    "db:studio": "pnpm --filter @trippulse/db studio",
+    "db:seed": "pnpm --filter @trippulse/db seed",
+    "db:generate": "pnpm --filter @trippulse/db generate",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose down -v && docker compose up -d",
+    "docker:logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "msgpackr-extract",
+      "prisma"
+    ]
+  }
+}
