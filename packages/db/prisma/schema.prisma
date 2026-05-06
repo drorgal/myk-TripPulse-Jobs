@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  PENDING    // Created, sitting in the Redis queue
+  PROCESSING // A worker has picked it up
+  COMPLETED  // All providers responded, results saved
+  FAILED     // Unrecoverable — all providers failed after all retries
+  PARTIAL    // Some providers succeeded, some failed — results are still useful
+}
+
+model SearchJob {
+  id String @id @default(cuid())
+
+  status JobStatus @default(PENDING)
+
+  // Search parameters stored as JSON — flexible schema.
+  // Adding new search fields (e.g. passengerCount) requires no migration.
+  // Tradeoff: cannot query by individual param fields in SQL.
+  params Json
+
+  // BullMQ job ID — correlates the DB record with the Redis queue entry.
+  bullJobId String? @unique
+
+  // Which providers were attempted (populated when job completes)
+  providers String[] @default([])
+
+  errorMessage String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  carOffers CarOffer[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CarOffer {
+  id String @id @default(cuid())
+
+  searchJobId String
+  searchJob   SearchJob @relation(fields: [searchJobId], references: [id], onDelete: Cascade)
+
+  // Which provider produced this offer — critical for debugging and deduplication
+  providerName    String
+  providerOfferId String // The raw ID from the provider's response
+
+  // Normalized vehicle data — provider-agnostic canonical shape
+  vehicleType  String // "economy" | "compact" | "midsize" | "suv" | "van" | "luxury"
+  vehicleName  String // "Toyota Yaris or similar"
+  vehicleClass String @default("") // SIPP code if available: "ECMR"
+
+  // Prices always stored in minor units (cents) — $45.00 = 4500
+  // Never use Float for monetary values; floating-point arithmetic causes rounding errors.
+  priceTotal    Int // Total price in cents
+  priceCurrency String // ISO 4217: "USD", "EUR"
+  pricePerDay   Int // Derived: priceTotal / rentalDays, in cents
+
+  // Location
+  pickupLocation  String
+  dropoffLocation String
+  pickupLat       Float?
+  pickupLng       Float?
+  dropoffLat      Float?
+  dropoffLng      Float?
+
+  // Dates
+  pickupDateTime  DateTime
+  dropoffDateTime DateTime
+  rentalDays      Int
+
+  // Normalized vehicle features — easier to filter than raw strings
+  hasAC      Boolean @default(true)
+  isAutomatic Boolean @default(true)
+  seatsCount Int?
+  bagCount   Int?
+
+  // Direct booking link from the provider
+  bookingUrl String?
+
+  // Raw provider response stored alongside normalized data.
+  // When normalization logic has a bug, re-process rawData without re-querying the provider.
+  rawData Json?
+
+  createdAt DateTime @default(now())
+
+  // Prevents duplicate offers when a worker retries.
+  // The processor uses createMany({ skipDuplicates: true }) — this constraint enforces it.
+  @@unique([searchJobId, providerName, providerOfferId])
+  @@index([searchJobId])
+  @@index([priceTotal])
+  @@index([vehicleType])
+}
