@@ -9,6 +9,7 @@
     "build": "pnpm --filter @trippulse/shared build && pnpm --filter @trippulse/db build && pnpm --filter @trippulse/api build && pnpm --filter @trippulse/worker build",
     "test": "pnpm -r test",
     "db:migrate": "pnpm --filter @trippulse/db migrate",
+    "db:migrate:deploy": "pnpm --filter @trippulse/db migrate:deploy",
     "db:studio": "pnpm --filter @trippulse/db studio",
     "db:seed": "pnpm --filter @trippulse/db seed",
     "db:generate": "pnpm --filter @trippulse/db generate",

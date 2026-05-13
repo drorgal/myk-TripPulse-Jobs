@@ -1,0 +1,448 @@
+{
+  "info": {
+    "name": "TripPulse Jobs API",
+    "description": "Car rental job queue API with dual-pipeline scraping.\n\nFlow:\n1. POST /jobs/car-search → creates TWO async jobs:\n   - car-search queue (Node.js) → mock + rentalcars API\n   - car-scrape queue (Python)  → Hertz / Sixt / Enterprise via Playwright\n2. Poll GET /jobs/:id until status = COMPLETED\n3. GET /offers/cars?jobId=... → all offers from all sources\n\nNotes:\n- Prices are always in CENTS: 4500 = €45.00\n- Node.js worker controls SearchJob status (PENDING→COMPLETED)\n- Python scrapers add offers asynchronously — poll /offers/cars a few seconds after COMPLETED to see Hertz results\n- providerName field identifies the source: \"mock\", \"rentalcars\", \"hertz\", \"sixt\", \"enterprise\"",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "description": "Set automatically after POST /jobs/car-search",
+      "type": "string"
+    },
+    {
+      "key": "workerMetricsUrl",
+      "value": "http://localhost:9091",
+      "description": "Python worker / Node worker metrics port",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Metrics",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health",
+            "description": "Deep health check — probes PostgreSQL and Redis.\n200 = healthy, 503 = degraded (at least one dependency down)."
+          },
+          "response": [
+            {
+              "name": "Healthy",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"ok\",\n  \"uptime\": 142,\n  \"db\": { \"status\": \"ok\", \"latencyMs\": 3 },\n  \"redis\": { \"status\": \"ok\", \"latencyMs\": 1 }\n}"
+            },
+            {
+              "name": "Degraded (DB down)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"degraded\",\n  \"uptime\": 142,\n  \"db\": { \"status\": \"error\", \"error\": \"Can't reach database server\" },\n  \"redis\": { \"status\": \"ok\", \"latencyMs\": 1 }\n}"
+            }
+          ]
+        },
+        {
+          "name": "API Prometheus metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/metrics",
+            "description": "Prometheus text-format metrics from the API process.\nIncludes: http_requests_total, http_request_duration_ms, jobs_created_total.\nSee also Worker metrics on port 9091."
+          },
+          "response": [
+            {
+              "name": "Prometheus text format",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "text/plain; version=0.0.4; charset=utf-8" }],
+              "body": "# HELP http_requests_total Total HTTP requests\n# TYPE http_requests_total counter\nhttp_requests_total{method=\"GET\",route=\"/health\",status=\"200\"} 3\n\n# HELP jobs_created_total Total car search jobs created\n# TYPE jobs_created_total counter\njobs_created_total{status=\"success\"} 5\n..."
+            }
+          ]
+        },
+        {
+          "name": "Worker Prometheus metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{workerMetricsUrl}}/metrics",
+            "description": "Prometheus metrics from the Node.js worker process (port 9091).\nIncludes: job_processing_duration_ms, provider_call_duration_ms, provider_calls_total, jobs_active, jobs_processed_total."
+          },
+          "response": [
+            {
+              "name": "Prometheus text format",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "text/plain; version=0.0.4; charset=utf-8" }],
+              "body": "# HELP jobs_processed_total Total car search jobs processed by the worker\n# TYPE jobs_processed_total counter\njobs_processed_total{status=\"COMPLETED\"} 4\njobs_processed_total{status=\"PARTIAL\"} 1\n\n# HELP provider_calls_total Total provider search calls\n# TYPE provider_calls_total counter\nprovider_calls_total{provider=\"mock\",result=\"success\"} 5\nprovider_calls_total{provider=\"rentalcars\",result=\"failed\"} 1\n\n# HELP jobs_active Number of car search jobs currently being processed\n# TYPE jobs_active gauge\njobs_active 0\n..."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "Create car search job — Rome (EUR)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('jobId', body.jobId);",
+                  "    console.log('jobId saved:', body.jobId);",
+                  "    console.log('Both car-search (Node.js) and car-scrape (Python) jobs enqueued.');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/car-search",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLocation\": \"Rome Fiumicino Airport\",\n  \"dropoffLocation\": \"Rome Fiumicino Airport\",\n  \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n  \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n  \"currency\": \"EUR\",\n  \"driverAge\": 30\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Creates a SearchJob and enqueues TWO async jobs:\n1. car-search queue → Node.js worker (mock + rentalcars API)\n2. car-scrape queue → Python worker (Hertz / Sixt / Enterprise via Playwright)\n\nReturns 202 immediately. The test script saves jobId to {{jobId}}.\n\nTip: after COMPLETED, wait 2-3s and re-fetch /offers/cars — Hertz results may still be arriving."
+          },
+          "response": [
+            {
+              "name": "202 Accepted",
+              "status": "Accepted",
+              "code": 202,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"jobId\": \"cmo1abc123\",\n  \"status\": \"PENDING\",\n  \"statusUrl\": \"/jobs/cmo1abc123\",\n  \"offersUrl\": \"/offers/cars?jobId=cmo1abc123\",\n  \"estimatedWaitMs\": 5000\n}"
+            },
+            {
+              "name": "400 Validation error (missing field)",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"{\\\"pickupLocation\\\":[\\\"Required\\\"]}\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create car search job — Tel Aviv (ILS)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('jobId', body.jobId);",
+                  "    console.log('jobId saved:', body.jobId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/car-search",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLocation\": \"Tel Aviv Ben Gurion Airport\",\n  \"dropoffLocation\": \"Tel Aviv Ben Gurion Airport\",\n  \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n  \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n  \"currency\": \"ILS\",\n  \"driverAge\": 30\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Israeli market example. Saves jobId to {{jobId}}."
+          },
+          "response": []
+        },
+        {
+          "name": "Create car search job — Hertz only (scraper override)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/car-search",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLocation\": \"Paris Charles de Gaulle Airport\",\n  \"dropoffLocation\": \"Paris Charles de Gaulle Airport\",\n  \"pickupDateTime\": \"2026-08-01T09:00:00.000Z\",\n  \"dropoffDateTime\": \"2026-08-05T09:00:00.000Z\",\n  \"currency\": \"EUR\",\n  \"scrapers\": [\"hertz\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Use the 'scrapers' field to run only specific scrapers in the Python pipeline.\nHere we run only Hertz — skips Sixt and Enterprise.\nUseful for debugging a single scraper."
+          },
+          "response": []
+        },
+        {
+          "name": "Create car search job — minimal body",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/car-search",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLocation\": \"Paris CDG Airport\",\n  \"dropoffLocation\": \"Paris CDG Airport\",\n  \"pickupDateTime\": \"2026-08-01T09:00:00.000Z\",\n  \"dropoffDateTime\": \"2026-08-05T09:00:00.000Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Minimal valid body — currency defaults to USD, driverAge defaults to 30."
+          },
+          "response": []
+        },
+        {
+          "name": "Create car search job — validation error",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/jobs/car-search",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLocation\": \"Rome\",\n  \"dropoffLocation\": \"Rome\",\n  \"pickupDateTime\": \"not-a-date\",\n  \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Invalid pickupDateTime — should return 400 VALIDATION_ERROR."
+          },
+          "response": []
+        },
+        {
+          "name": "Get job status",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/{{jobId}}",
+            "description": "Poll this until status is COMPLETED, PARTIAL, or FAILED.\n\nStatus flow: PENDING → PROCESSING → COMPLETED | PARTIAL | FAILED\n\nNote: COMPLETED means the Node.js pipeline finished.\nThe Python scraper (Hertz etc.) may still be running — check /offers/cars a few seconds later for additional results."
+          },
+          "response": [
+            {
+              "name": "200 PENDING",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"cmo1abc123\",\n  \"status\": \"PENDING\",\n  \"params\": {\n    \"pickupLocation\": \"Rome Fiumicino Airport\",\n    \"dropoffLocation\": \"Rome Fiumicino Airport\",\n    \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n    \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n    \"currency\": \"EUR\",\n    \"driverAge\": 30\n  },\n  \"providers\": [],\n  \"offerCount\": 0,\n  \"errorMessage\": null,\n  \"createdAt\": \"2026-05-07T10:00:00.000Z\",\n  \"completedAt\": null\n}"
+            },
+            {
+              "name": "200 COMPLETED (mock only)",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"cmo1abc123\",\n  \"status\": \"COMPLETED\",\n  \"params\": {\n    \"pickupLocation\": \"Rome Fiumicino Airport\",\n    \"dropoffLocation\": \"Rome Fiumicino Airport\",\n    \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n    \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n    \"currency\": \"EUR\",\n    \"driverAge\": 30\n  },\n  \"providers\": [\"mock\"],\n  \"offerCount\": 3,\n  \"errorMessage\": null,\n  \"createdAt\": \"2026-05-07T10:00:00.000Z\",\n  \"completedAt\": \"2026-05-07T10:00:05.000Z\"\n}"
+            },
+            {
+              "name": "200 COMPLETED (mock + hertz scraper)",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"cmo1abc123\",\n  \"status\": \"COMPLETED\",\n  \"params\": {\n    \"pickupLocation\": \"Rome Fiumicino Airport\",\n    \"dropoffLocation\": \"Rome Fiumicino Airport\",\n    \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n    \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n    \"currency\": \"EUR\",\n    \"driverAge\": 30\n  },\n  \"providers\": [\"mock\"],\n  \"offerCount\": 11,\n  \"errorMessage\": null,\n  \"createdAt\": \"2026-05-07T10:00:00.000Z\",\n  \"completedAt\": \"2026-05-07T10:00:05.000Z\"\n}"
+            },
+            {
+              "name": "200 PARTIAL (some providers failed)",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"cmo1abc123\",\n  \"status\": \"PARTIAL\",\n  \"params\": {},\n  \"providers\": [\"mock\"],\n  \"offerCount\": 3,\n  \"errorMessage\": \"Providers failed: rentalcars\",\n  \"createdAt\": \"2026-05-07T10:00:00.000Z\",\n  \"completedAt\": \"2026-05-07T10:00:05.000Z\"\n}"
+            },
+            {
+              "name": "404 Not found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"SearchJob not found: nonexistent-id\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get job status — not found",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/nonexistent-id",
+            "description": "Should return 404 NOT_FOUND."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Offers",
+      "item": [
+        {
+          "name": "Get car offers for job",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}", "description": "Required — the SearchJob ID" },
+                { "key": "vehicleType", "value": null, "disabled": true, "description": "economy | compact | midsize | suv | van | luxury" },
+                { "key": "providerName", "value": null, "disabled": true, "description": "mock | rentalcars | hertz | sixt | enterprise" },
+                { "key": "maxPrice", "value": null, "disabled": true, "description": "Max price in cents (e.g. 50000 = €500)" },
+                { "key": "sortBy", "value": null, "disabled": true, "description": "price (default) | rentalDays" },
+                { "key": "limit", "value": null, "disabled": true, "description": "1–100, default 20" },
+                { "key": "offset", "value": null, "disabled": true, "description": "Pagination offset, default 0" }
+              ]
+            },
+            "description": "Fetches paginated car offers for a completed job.\nAll query params except jobId are optional.\n\nPrices are in cents: 4500 = €45.00\n\nproviderName values:\n- \"mock\" — deterministic test data\n- \"rentalcars\" — real API (requires RENTALCARS_API_KEY)\n- \"hertz\" — Playwright scraper (real prices from hertz.com)\n- \"sixt\" — Playwright scraper (skeleton, coming soon)\n- \"enterprise\" — Playwright scraper (skeleton, coming soon)"
+          },
+          "response": [
+            {
+              "name": "200 with mock + hertz offers",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"offers\": [\n    {\n      \"id\": \"offer-1\",\n      \"searchJobId\": \"cmo1abc123\",\n      \"providerName\": \"mock\",\n      \"providerOfferId\": \"mock-1-1\",\n      \"vehicleType\": \"economy\",\n      \"vehicleName\": \"Toyota Yaris or similar\",\n      \"vehicleClass\": \"ECMR\",\n      \"priceTotal\": 31500,\n      \"priceCurrency\": \"EUR\",\n      \"pricePerDay\": 4500,\n      \"pickupLocation\": \"Rome Fiumicino Airport\",\n      \"dropoffLocation\": \"Rome Fiumicino Airport\",\n      \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n      \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n      \"rentalDays\": 7,\n      \"hasAC\": true,\n      \"isAutomatic\": false,\n      \"seatsCount\": 5,\n      \"bagCount\": 1,\n      \"bookingUrl\": \"https://example.com/book/mock-1-1\",\n      \"createdAt\": \"2026-05-07T10:00:05.000Z\"\n    },\n    {\n      \"id\": \"offer-4\",\n      \"searchJobId\": \"cmo1abc123\",\n      \"providerName\": \"hertz\",\n      \"providerOfferId\": \"a1b2c3d4e5f6g7h8\",\n      \"vehicleType\": \"compact\",\n      \"vehicleName\": \"Fiat 500 or similar\",\n      \"vehicleClass\": \"CDMR\",\n      \"priceTotal\": 28000,\n      \"priceCurrency\": \"EUR\",\n      \"pricePerDay\": 4000,\n      \"pickupLocation\": \"Rome Fiumicino Airport\",\n      \"dropoffLocation\": \"Rome Fiumicino Airport\",\n      \"pickupDateTime\": \"2026-07-01T10:00:00.000Z\",\n      \"dropoffDateTime\": \"2026-07-08T10:00:00.000Z\",\n      \"rentalDays\": 7,\n      \"hasAC\": true,\n      \"isAutomatic\": true,\n      \"seatsCount\": 4,\n      \"bagCount\": 1,\n      \"bookingUrl\": \"https://www.hertz.com/rentacar/reservation/\",\n      \"createdAt\": \"2026-05-07T10:00:12.000Z\"\n    }\n  ],\n  \"total\": 11,\n  \"jobStatus\": \"COMPLETED\",\n  \"pagination\": {\n    \"limit\": 20,\n    \"offset\": 0,\n    \"hasMore\": false\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get car offers — Hertz only",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}&providerName=hertz",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}" },
+                { "key": "providerName", "value": "hertz", "description": "Only Hertz scraper results" }
+              ]
+            },
+            "description": "Returns only offers scraped from hertz.com.\nUseful to isolate real prices from a specific scraper."
+          },
+          "response": []
+        },
+        {
+          "name": "Get car offers — filter by vehicleType",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}&vehicleType=economy",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}" },
+                { "key": "vehicleType", "value": "economy" }
+              ]
+            },
+            "description": "Returns only economy cars for the job (from all providers/scrapers)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get car offers — filter by maxPrice",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}&maxPrice=50000",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}" },
+                { "key": "maxPrice", "value": "50000", "description": "Max €500.00 total" }
+              ]
+            },
+            "description": "Returns only offers where priceTotal ≤ 50000 cents (€500)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get car offers — sorted by rental days",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}&sortBy=rentalDays",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}" },
+                { "key": "sortBy", "value": "rentalDays" }
+              ]
+            },
+            "description": "Sort by rentalDays ascending instead of price."
+          },
+          "response": []
+        },
+        {
+          "name": "Get car offers — paginated",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?jobId={{jobId}}&limit=5&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "jobId", "value": "{{jobId}}" },
+                { "key": "limit", "value": "5" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "Fetch 5 offers at a time. Check pagination.hasMore to know if there are more pages."
+          },
+          "response": []
+        },
+        {
+          "name": "Get car offers — invalid vehicleType",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/offers/cars?vehicleType=spaceship",
+              "host": ["{{baseUrl}}"],
+              "path": ["offers", "cars"],
+              "query": [
+                { "key": "vehicleType", "value": "spaceship" }
+              ]
+            },
+            "description": "Should return 400 VALIDATION_ERROR. Valid types: economy, compact, midsize, suv, van, luxury."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Scrapers & Monitoring",
+      "item": [
+        {
+          "name": "Grafana dashboard",
+          "request": {
+            "method": "GET",
+            "url": "http://localhost:3002",
+            "description": "Open Grafana in browser.\nLogin: admin / localdev\n\nDashboard 'TripPulse Jobs' shows:\n- Jobs created/min\n- Active jobs gauge\n- Job processing time p50/p95\n- Provider call latency per provider\n- Provider success rate\n- Worker logs (Loki)"
+          },
+          "response": []
+        },
+        {
+          "name": "Prometheus UI",
+          "request": {
+            "method": "GET",
+            "url": "http://localhost:9090",
+            "description": "Prometheus expression browser.\nSample queries:\n  jobs_processed_total\n  rate(provider_calls_total[5m])\n  histogram_quantile(0.95, rate(job_processing_duration_ms_bucket[5m]))"
+          },
+          "response": []
+        },
+        {
+          "name": "Worker health (port 9091)",
+          "request": {
+            "method": "GET",
+            "url": "{{workerMetricsUrl}}/health",
+            "description": "Lightweight health check on the Node.js worker metrics server.\n200 = worker process is alive."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{ \"status\": \"ok\" }"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 // A typo in either place causes silent failures — centralizing prevents that.
 export const QUEUE_NAMES = {
   CAR_SEARCH: 'car-search',
+  CAR_SCRAPE: 'car-scrape',
   // HOTEL_SEARCH: 'hotel-search',   // Phase 8
   // FLIGHT_SEARCH: 'flight-search', // Future
 } as const;

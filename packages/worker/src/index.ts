@@ -1,11 +1,13 @@
 import { createLogger } from '@trippulse/shared';
 import { startCarSearchWorker } from './workers/car-search.worker';
+import { startMetricsServer } from './metrics';
 
 const logger = createLogger('worker-main');
 
 async function main() {
   logger.info('TripPulse Jobs worker starting...');
 
+  startMetricsServer();
   startCarSearchWorker();
 
   logger.info('Workers ready. Waiting for jobs...');

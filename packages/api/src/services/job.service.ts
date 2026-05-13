@@ -1,7 +1,7 @@
 import { prisma } from '@trippulse/db';
 import { NotFoundError } from '@trippulse/shared';
 import type { CarSearchParams } from '@trippulse/shared';
-import { carSearchQueue } from '../queue';
+import { carSearchQueue, carScrapeQueue } from '../queue';
 
 export async function createCarSearchJob(params: CarSearchParams) {
   const searchJob = await prisma.searchJob.create({
@@ -12,14 +12,20 @@ export async function createCarSearchJob(params: CarSearchParams) {
     },
   });
 
+  const requestedAt = new Date().toISOString();
+
   const bullJob = await carSearchQueue.add(
     'car-search',
-    {
-      searchJobId: searchJob.id,
-      params,
-      requestedAt: new Date().toISOString(),
-    },
+    { searchJobId: searchJob.id, params, requestedAt },
     { jobId: searchJob.id },
+  );
+
+  // Fire-and-forget scrape job — Python workers pick this up asynchronously.
+  // Uses a different job ID so it doesn't collide with the car-search job.
+  await carScrapeQueue.add(
+    'car-scrape',
+    { searchJobId: searchJob.id, params, requestedAt },
+    { jobId: `scrape-${searchJob.id}` },
   );
 
   await prisma.searchJob.update({

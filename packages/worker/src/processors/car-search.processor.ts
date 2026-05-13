@@ -2,11 +2,21 @@ import { prisma } from '@trippulse/db';
 import { createLogger } from '@trippulse/shared';
 import type { CarSearchJobPayload } from '@trippulse/shared';
 import { getCarRentalProviders } from '../providers/car-rental/registry';
+import {
+  jobProcessingDurationMs,
+  providerCallDurationMs,
+  providerCallsTotal,
+  jobsActive,
+  jobsProcessedTotal,
+} from '../metrics';
 
 const logger = createLogger('car-search-processor');
 
 export async function processCarSearch(payload: CarSearchJobPayload): Promise<void> {
   const { searchJobId, params } = payload;
+
+  const jobStart = Date.now();
+  jobsActive.inc();
 
   await prisma.searchJob.update({
     where: { id: searchJobId },
@@ -21,7 +31,21 @@ export async function processCarSearch(payload: CarSearchJobPayload): Promise<vo
 
   // allSettled — one provider failing must NOT fail the entire job.
   // If provider A fails and provider B succeeds, we still save B's results.
-  const results = await Promise.allSettled(providers.map((p) => p.search(params)));
+  const results = await Promise.allSettled(
+    providers.map(async (p) => {
+      const providerStart = Date.now();
+      try {
+        const result = await p.search(params);
+        providerCallDurationMs.observe({ provider: p.name }, Date.now() - providerStart);
+        providerCallsTotal.inc({ provider: p.name, result: 'success' });
+        return result;
+      } catch (err) {
+        providerCallDurationMs.observe({ provider: p.name }, Date.now() - providerStart);
+        providerCallsTotal.inc({ provider: p.name, result: 'failed' });
+        throw err;
+      }
+    }),
+  );
 
   let totalOffers = 0;
   const failedProviders: string[] = [];
@@ -92,7 +116,12 @@ export async function processCarSearch(payload: CarSearchJobPayload): Promise<vo
     },
   });
 
-  logger.info({ searchJobId, finalStatus, totalOffers }, 'Car search processing complete');
+  const durationMs = Date.now() - jobStart;
+  jobProcessingDurationMs.observe({ status: finalStatus }, durationMs);
+  jobsProcessedTotal.inc({ status: finalStatus });
+  jobsActive.dec();
+
+  logger.info({ searchJobId, finalStatus, totalOffers, durationMs }, 'Car search processing complete');
 
   if (allFailed) {
     // Throwing causes BullMQ to mark this job as FAILED and schedule a retry
